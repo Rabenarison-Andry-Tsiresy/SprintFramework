@@ -1,5 +1,5 @@
 package src;
-// sprint 1
+
 import java.io.File;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -27,7 +27,7 @@ import src.annotation.PostMapping;
 import src.annotation.RequestMapping;
 
 public class FrontControllerServlet extends HttpServlet {
-    private final Map<Mapping, MethodInfo> urlMappings = new HashMap<>();
+    private final Map<Mapping, List<MethodInfo>> urlMappings = new HashMap<>();
     private String packageName;
 
     private static class MethodInfo {
@@ -35,7 +35,8 @@ public class FrontControllerServlet extends HttpServlet {
         Method method;
         Object controllerInstance;
 
-        MethodInfo(Class<?> controllerClass, Method method, Object controllerInstance) {
+        MethodInfo(Class<?> controllerClass, Method method,
+             Object controllerInstance) {
             this.controllerClass = controllerClass;
             this.method = method;
             this.controllerInstance = controllerInstance;
@@ -48,7 +49,7 @@ public class FrontControllerServlet extends HttpServlet {
         String configuredPackage = config != null ? config.getInitParameter("base-package") : null;
         packageName = configuredPackage != null && !configuredPackage.isBlank()
                 ? configuredPackage
-                : "iavo.main";
+                : "Tsiresy.main";
 
         try {
             scanPackage(packageName);
@@ -121,8 +122,10 @@ public class FrontControllerServlet extends HttpServlet {
             for (Method method : methods) {
                 if (method.isAnnotationPresent(RequestMapping.class)) {
                     RequestMapping rm = method.getAnnotation(RequestMapping.class);
-                    Mapping mapping = new Mapping(rm.url(), "GET");
-                    urlMappings.put(mapping, new MethodInfo(clazz, method, controllerInstance));
+                    Mapping mapping = new Mapping(rm.url(), rm.method());
+                    checkDuplicate(mapping, clazz, method);
+                    urlMappings.computeIfAbsent(mapping, k -> new ArrayList<>())
+                            .add(new MethodInfo(clazz, method, controllerInstance));
                 }
 
                 if (method.isAnnotationPresent(GetMapping.class)) {
@@ -131,8 +134,9 @@ public class FrontControllerServlet extends HttpServlet {
 
                     Mapping mapping = new Mapping(gm.value(), "GET");
 
-                    urlMappings.put(mapping,
-                            new MethodInfo(clazz, method, controllerInstance));
+                    checkDuplicate(mapping, clazz, method);
+                    urlMappings.computeIfAbsent(mapping, k -> new ArrayList<>())
+                            .add(new MethodInfo(clazz, method, controllerInstance));
                 }
 
                 if (method.isAnnotationPresent(PostMapping.class)) {
@@ -141,10 +145,23 @@ public class FrontControllerServlet extends HttpServlet {
 
                     Mapping mapping = new Mapping(pm.value(), "POST");
 
-                    urlMappings.put(mapping,
-                            new MethodInfo(clazz, method, controllerInstance));
+                    checkDuplicate(mapping, clazz, method);
+                    urlMappings.computeIfAbsent(mapping, k -> new ArrayList<>())
+                            .add(new MethodInfo(clazz, method, controllerInstance));
                 }
             }
+        }
+    }
+
+    private void checkDuplicate(Mapping mapping, Class<?> clazz, Method method) {
+        List<MethodInfo> existing = urlMappings.get(mapping);
+        if (existing != null && !existing.isEmpty()) {
+            throw new IllegalStateException(
+                "Duplicate mapping detected: [" + mapping.getHttpMethod() + "] " + mapping.getUrl()
+                + " already mapped in " + existing.get(0).controllerClass.getSimpleName()
+                + "." + existing.get(0).method.getName()
+                + " and cannot be mapped again in " + clazz.getSimpleName() + "." + method.getName()
+            );
         }
     }
 
@@ -157,65 +174,81 @@ public class FrontControllerServlet extends HttpServlet {
     protected void doPost(HttpServletRequest req, HttpServletResponse res) throws ServletException, IOException {
         processRequest(req, res);
     }
-  public void processRequest(HttpServletRequest req, HttpServletResponse res)
+public void processRequest(HttpServletRequest req, HttpServletResponse res)
         throws ServletException, IOException {
-
-    res.setContentType("text/plain");
-    PrintWriter out = res.getWriter();
 
     String requestUri = req.getRequestURI();
     String contextPath = req.getContextPath();
     String url = requestUri.substring(contextPath.length());
 
-    // Cas : http://localhost:8080/MonProjet/
+    // ===============================
+    // Laisser Tomcat servir les ressources statiques
+    // ===============================
+    if (url.matches(".*\\.(html|htm|css|js|png|jpg|jpeg|gif|ico|svg|woff|woff2|ttf)$")) {
+        req.getServletContext()
+                .getNamedDispatcher("default")
+                .forward(req, res);
+        return;
+    }
+
+    res.setContentType("text/plain");
+    PrintWriter out = res.getWriter();
+
+    // Afficher les routes disponibles à la racine
     if (url.equals("") || url.equals("/")) {
 
         out.println("===== LISTE DES ROUTES DISPONIBLES =====");
         out.println();
 
-        for (Map.Entry<Mapping, MethodInfo> entry : urlMappings.entrySet()) {
+        for (Map.Entry<Mapping, List<MethodInfo>> entry : urlMappings.entrySet()) {
 
             Mapping mapping = entry.getKey();
-            MethodInfo info = entry.getValue();
+            List<MethodInfo> infos = entry.getValue();
 
-            out.println("URL         : " + mapping.getUrl());
-            out.println("HTTP Method : " + mapping.getHttpMethod());
-            out.println("Classe      : " + info.controllerClass.getSimpleName());
-            out.println("Méthode     : " + info.method.getName());
-            out.println("----------------------------------------");
+            for (MethodInfo info : infos) {
+                out.println("URL         : " + mapping.getUrl());
+                out.println("HTTP Method : " + mapping.getHttpMethod());
+                out.println("Classe      : " + info.controllerClass.getSimpleName());
+                out.println("Méthode     : " + info.method.getName());
+                out.println("----------------------------------------");
+            }
         }
 
         return;
     }
 
-    // Récupérer GET ou POST
     String httpMethod = req.getMethod();
 
-    // Créer la clé
     Mapping mapping = new Mapping(url, httpMethod);
 
-    // Chercher la méthode correspondante
-    MethodInfo methodInfo = urlMappings.get(mapping);
+    List<MethodInfo> methodInfos = urlMappings.get(mapping);
 
-    if (methodInfo != null) {
+    if (methodInfos != null && !methodInfos.isEmpty()) {
 
         try {
 
-            // Exécuter la méthode du contrôleur
-            methodInfo.method.invoke(methodInfo.controllerInstance);
+            for (MethodInfo methodInfo : methodInfos) {
+                Object result = methodInfo.method.invoke(methodInfo.controllerInstance);
 
-            out.println("===== ROUTE TROUVÉE =====");
-            out.println("URL         : " + url);
-            out.println("HTTP Method : " + httpMethod);
-            out.println("Classe      : " + methodInfo.controllerClass.getSimpleName());
-            out.println("Méthode     : " + methodInfo.method.getName());
+                out.println("===== ROUTE TROUVÉE =====");
+                out.println("URL         : " + url);
+                out.println("HTTP Method : " + httpMethod);
+                out.println("Classe      : " + methodInfo.controllerClass.getSimpleName());
+                out.println("Méthode     : " + methodInfo.method.getName());
+
+                if (result != null) {
+                    out.println("Retour : " + result);
+                }
+                out.println("----------------------------------------");
+            }
 
         } catch (IllegalAccessException | InvocationTargetException e) {
-            throw new ServletException(
-                    "Erreur lors de l'appel de la méthode.", e);
+            throw new ServletException("Erreur lors de l'appel de la méthode.", e);
         }
 
     } else {
+
+        res.setStatus(HttpServletResponse.SC_NOT_FOUND);
 
         out.println("===== ERREUR 404 =====");
         out.println("Aucune méthode trouvée pour :");
@@ -225,19 +258,21 @@ public class FrontControllerServlet extends HttpServlet {
 
         out.println("Routes disponibles :");
 
-        for (Map.Entry<Mapping, MethodInfo> entry : urlMappings.entrySet()) {
+        for (Map.Entry<Mapping, List<MethodInfo>> entry : urlMappings.entrySet()) {
 
             Mapping m = entry.getKey();
-            MethodInfo info = entry.getValue();
+            List<MethodInfo> infos = entry.getValue();
 
-            out.println(
-                    "[" + m.getHttpMethod() + "] "
-                    + m.getUrl()
-                    + " -> "
-                    + info.controllerClass.getSimpleName()
-                    + "."
-                    + info.method.getName()
-            );
+            for (MethodInfo info : infos) {
+                out.println(
+                        "[" + m.getHttpMethod() + "] "
+                        + m.getUrl()
+                        + " -> "
+                        + info.controllerClass.getSimpleName()
+                        + "."
+                        + info.method.getName()
+                );
+            }
         }
     }
 }
