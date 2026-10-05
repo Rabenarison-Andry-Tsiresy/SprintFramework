@@ -32,7 +32,7 @@ public class FrontControllerListener implements ServletContextListener {
         String configuredPackage = context.getInitParameter("base-package");
         String packageName = configuredPackage != null && !configuredPackage.isBlank()
                 ? configuredPackage
-                : "Tsiresy.main";
+                : "tsiresy.main";
 
         String viewPrefix = context.getInitParameter("view-prefix");
         if (viewPrefix == null) {
@@ -43,6 +43,8 @@ public class FrontControllerListener implements ServletContextListener {
         if (viewSuffix == null) {
             viewSuffix = ".jsp";
         }
+
+        
 
         Map<Mapping, List<FrontControllerServlet.MethodInfo>> urlMappings = new HashMap<>();
 

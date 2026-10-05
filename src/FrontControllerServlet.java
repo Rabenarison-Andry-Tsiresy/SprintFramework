@@ -3,7 +3,6 @@ package src;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
-import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -13,9 +12,7 @@ import jakarta.servlet.ServletException;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
-import src.annotation.GetMapping;
-import src.annotation.PostMapping;
-import src.annotation.RequestMapping;
+import src.annotation.UrlApi;
 
 public class FrontControllerServlet extends HttpServlet {
 
@@ -82,8 +79,12 @@ public void processRequest(HttpServletRequest req, HttpServletResponse res)
             List<MethodInfo> infos = entry.getValue();
 
             for (MethodInfo info : infos) {
+                boolean isApi = info.method.isAnnotationPresent(UrlApi.class);
+                boolean isObject = info.method.isAnnotationPresent(src.annotation.Object.class);
+                String type = isApi ? "API (JSON)" : (isObject ? "OBJET (JSON)" : "VUE");
                 out.println("URL         : " + mapping.getUrl());
                 out.println("HTTP Method : " + mapping.getHttpMethod());
+                out.println("Type        : " + type);
                 out.println("Classe      : " + info.controllerClass.getSimpleName());
                 out.println("Méthode     : " + info.method.getName());
                 out.println("----------------------------------------");
@@ -104,9 +105,32 @@ public void processRequest(HttpServletRequest req, HttpServletResponse res)
         try {
 
             for (MethodInfo methodInfo : methodInfos) {
-                Object result = methodInfo.method.invoke(methodInfo.controllerInstance);
+                Object[] args;
+                try {
+                    args = ParamBinder.resolveMethodArgs(methodInfo.method, req, res);
+                } catch (Exception e) {
+                    res.setStatus(HttpServletResponse.SC_BAD_REQUEST);
+                    res.setContentType("text/plain;charset=UTF-8");
+                    res.getWriter().println("===== ERREUR 400 - BINDING =====");
+                    res.getWriter().println("Impossible de remplir l'objet depuis la requête : " + e.getMessage());
+                    return;
+                }
+                Object result = methodInfo.method.invoke(methodInfo.controllerInstance, args);
 
-                // Si le contrôleur retourne un ModelAndView, on dispatche vers la JSP
+                boolean isApi = methodInfo.method.isAnnotationPresent(UrlApi.class);
+                boolean isObject = methodInfo.method.isAnnotationPresent(src.annotation.Object.class);
+                if (isApi || isObject) {
+                    Object payload = result;
+
+                    if (payload instanceof ModelAndView mav) {
+                        payload = mav.getData();
+                    }
+                    res.setContentType("application/json;charset=UTF-8");
+                    res.setCharacterEncoding("UTF-8");
+                    res.getWriter().print(JsonUtil.toJson(payload));
+                    return;
+                }
+
                 if (result instanceof ModelAndView modelAndView) {
                     ServletContext context = getServletContext();
                     String viewPrefix = (String) context.getAttribute("viewPrefix");
@@ -164,9 +188,13 @@ public void processRequest(HttpServletRequest req, HttpServletResponse res)
             List<MethodInfo> infos = entry.getValue();
 
             for (MethodInfo info : infos) {
+                boolean isApi = info.method.isAnnotationPresent(UrlApi.class);
+                boolean isObject = info.method.isAnnotationPresent(src.annotation.Object.class);
                 out.println(
                         "[" + m.getHttpMethod() + "] "
                         + m.getUrl()
+                        + (isApi ? " [API]" : "")
+                        + (isObject ? " [OBJECT]" : "")
                         + " -> "
                         + info.controllerClass.getSimpleName()
                         + "."

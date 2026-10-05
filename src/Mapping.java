@@ -5,6 +5,7 @@ import java.util.Objects;
 public class Mapping {
 
     private String url;
+    
     private String httpMethod;
 
     public Mapping(String url, String httpMethod) {
