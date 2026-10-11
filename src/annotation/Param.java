@@ -5,34 +5,13 @@ import java.lang.annotation.Retention;
 import java.lang.annotation.RetentionPolicy;
 import java.lang.annotation.Target;
 
-/**
- * Associe un paramètre HTTP à un champ d'objet ou à un argument de méthode.
- *
- * Côté développeur, chaque champ du POJO porte son annotation :
- * <pre>
- * public class Employe {
- *     &#64;Param("nom")
- *     private String nom;
- *
- *     &#64;Param("age")
- *     private int age;
- * }
- * </pre>
- *
- * Et la méthode du contrôleur reçoit l'objet déjà rempli :
- * <pre>
- * &#64;PostMapping("/save")
- * public ModelAndView save(Employe emp) { ... }
- *
- * &#64;PostMapping("/save2")
- * public ModelAndView save2(&#64;Param("nom") String nom, &#64;Param("age") int age) { ... }
- * </pre>
- */
+// Sprint 7 : binding simple + conversion String -> int/double/boolean/Date
+// - sur paramètre : public String simple(@Param(name = "nom") String nom, ...)
+//   @Param("nom") et @Param(value = "nom") aussi acceptés
+// - sur champ (compat ancien style Employe) : @Param("nom") private String nom;
 @Target({ ElementType.FIELD, ElementType.PARAMETER })
 @Retention(RetentionPolicy.RUNTIME)
 public @interface Param {
-    /**
-     * Nom du paramètre HTTP. Si vide, le nom du champ / du paramètre est utilisé.
-     */
+    String name() default "";
     String value() default "";
 }

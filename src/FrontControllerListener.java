@@ -22,6 +22,7 @@ import src.annotation.Controller;
 import src.annotation.GetMapping;
 import src.annotation.PostMapping;
 import src.annotation.RequestMapping;
+import src.annotation.Url;
 
 @WebListener
 public class FrontControllerListener implements ServletContextListener {
@@ -144,6 +145,31 @@ public class FrontControllerListener implements ServletContextListener {
                 if (method.isAnnotationPresent(PostMapping.class)) {
                     PostMapping pm = method.getAnnotation(PostMapping.class);
                     Mapping mapping = new Mapping(pm.value(), "POST");
+                    checkDuplicate(mapping, clazz, method, urlMappings);
+                    urlMappings.computeIfAbsent(mapping, k -> new ArrayList<>())
+                            .add(new FrontControllerServlet.MethodInfo(clazz, method, controllerInstance));
+                }
+
+                // Sprint 7 : @Url(url = "/bind-simple") + @Get/@Post marqueurs
+                // Ex : @Url(url = "/bind-simple") -> GET
+                //      @Post @Url(url = "/bind-objet") -> POST
+                if (method.isAnnotationPresent(Url.class)) {
+                    Url u = method.getAnnotation(Url.class);
+                    String url = !u.url().isBlank() ? u.url() : u.value();
+                    if (url.isBlank()) {
+                        url = "/";
+                    }
+                    String httpMethod = u.method();
+                    if (method.isAnnotationPresent(src.annotation.Post.class)) {
+                        httpMethod = "POST";
+                    } else if (method.isAnnotationPresent(src.annotation.Get.class)) {
+                        httpMethod = "GET";
+                    }
+                    // normalise : doit commencer par /
+                    if (!url.startsWith("/")) {
+                        url = "/" + url;
+                    }
+                    Mapping mapping = new Mapping(url, httpMethod);
                     checkDuplicate(mapping, clazz, method, urlMappings);
                     urlMappings.computeIfAbsent(mapping, k -> new ArrayList<>())
                             .add(new FrontControllerServlet.MethodInfo(clazz, method, controllerInstance));
