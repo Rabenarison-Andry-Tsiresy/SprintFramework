@@ -21,6 +21,8 @@ import src.annotation.Param;
 import src.annotation.ParamObject;
 import src.annotation.Range;
 import src.annotation.Required;
+import jakarta.servlet.ServletException;
+import jakarta.servlet.http.Part;
 
 // Sprint 7 : @Param simple + conversion.
 // Sprint 7b : @ParamObject(prefix) + validation (@Required, @Numeric, @Range, @DateFormat).
@@ -38,8 +40,30 @@ public class ParamBinder {
             // Objets servlet injectés directement
             if (type.isAssignableFrom(HttpServletRequest.class)) { args[i] = req; continue; }
             if (type.isAssignableFrom(HttpServletResponse.class)) { args[i] = res; continue; }
-            if (type.isAssignableFrom(HttpSession.class)) { args[i] = req.getSession(); continue; }
-
+            if (Part.class.isAssignableFrom(type)) {
+                    Param paramAnn = p.getAnnotation(Param.class);
+                
+                    String fieldName;
+                
+                    if (paramAnn != null && !paramAnn.name().isBlank()) {
+                        fieldName = paramAnn.name();
+                    } else if (paramAnn != null && !paramAnn.value().isBlank()) {
+                        fieldName = paramAnn.value();
+                    } else {
+                        fieldName = p.getName();
+                    }
+                
+                    Part part = req.getPart(fieldName);
+                
+                    if (part == null || part.getSize() == 0) {
+                        throw new BindingException(
+                            "Aucun fichier reçu pour le champ : " + fieldName
+                        );
+                    }
+                
+                    args[i] = part;
+                    continue;
+                }
             rejectRequestParam(method, p);
 
             Param paramAnn = p.getAnnotation(Param.class);
