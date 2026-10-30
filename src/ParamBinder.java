@@ -1,5 +1,7 @@
 package src;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.lang.annotation.Annotation;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
@@ -15,14 +17,14 @@ import java.util.List;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import jakarta.servlet.http.HttpSession;
+import jakarta.servlet.http.Part;
 import src.annotation.DateFormat;
 import src.annotation.Numeric;
 import src.annotation.Param;
 import src.annotation.ParamObject;
 import src.annotation.Range;
 import src.annotation.Required;
-import jakarta.servlet.ServletException;
-import jakarta.servlet.http.Part;
+import src.annotation.SessionAttribute;
 
 // Sprint 7 : @Param simple + conversion.
 // Sprint 7b : @ParamObject(prefix) + validation (@Required, @Numeric, @Range, @DateFormat).
@@ -40,30 +42,43 @@ public class ParamBinder {
             // Objets servlet injectés directement
             if (type.isAssignableFrom(HttpServletRequest.class)) { args[i] = req; continue; }
             if (type.isAssignableFrom(HttpServletResponse.class)) { args[i] = res; continue; }
-            if (Part.class.isAssignableFrom(type)) {
-                    Param paramAnn = p.getAnnotation(Param.class);
-                
-                    String fieldName;
-                
-                    if (paramAnn != null && !paramAnn.name().isBlank()) {
-                        fieldName = paramAnn.name();
-                    } else if (paramAnn != null && !paramAnn.value().isBlank()) {
-                        fieldName = paramAnn.value();
-                    } else {
-                        fieldName = p.getName();
-                    }
-                
-                    Part part = req.getPart(fieldName);
-                
-                    if (part == null || part.getSize() == 0) {
-                        throw new BindingException(
-                            "Aucun fichier reçu pour le champ : " + fieldName
-                        );
-                    }
-                
-                    args[i] = part;
-                    continue;
+            if (type.isAssignableFrom(HttpSession.class)) { args[i] = req.getSession(); continue; }
+
+            SessionAttribute sessionAnn = p.getAnnotation(SessionAttribute.class);
+            if (sessionAnn != null) {
+                String name = !sessionAnn.name().isBlank() ? sessionAnn.name() : sessionAnn.value();
+                if (name.isBlank()) {
+                    name = p.getName();
                 }
+                Object value = req.getSession().getAttribute(name);
+                if (value == null) {
+                    if (sessionAnn.required()) {
+                        throw new BindingException("Attribut de session manquant : \"" + name + "\"");
+                    }
+                    args[i] = defaultSessionValue(type);
+                } else if (type.isInstance(value)) {
+                    args[i] = value;
+                } else if (value instanceof String) {
+                    try {
+                        args[i] = convert((String) value, type, name, null);
+                    } catch (Exception e) {
+                        throw new BindingException("Attribut de session \"" + name
+                            + "\" incompatible avec le type " + type.getSimpleName() + " : " + e.getMessage(), e);
+                    }
+                } else {
+                    throw new BindingException("Attribut de session \"" + name
+                        + "\" de type " + value.getClass().getSimpleName()
+                        + " incompatible avec le type " + type.getSimpleName());
+                }
+                continue;
+            }
+
+            // Sprint 8 : upload multipart -> FileUpload injecté tel quel
+            if (type == FileUpload.class) {
+                args[i] = resolveFileUpload(p, req);
+                continue;
+            }
+
             rejectRequestParam(method, p);
 
             Param paramAnn = p.getAnnotation(Param.class);
@@ -85,9 +100,22 @@ public class ParamBinder {
                 "Parametre non annote sur " + method.getDeclaringClass().getSimpleName()
                 + "." + method.getName() + "() param[" + i + " " + type.getSimpleName() + " " + p.getName() + "] : "
                 + "ajoutez @Param(name=\"...\") (Sprint 7), @ParamObject(name=\"...\") (Sprint 7b), "
-                + "ou HttpServletRequest/Response/Session.");
+                + "@SessionAttribute, FileUpload (Sprint 8), ou HttpServletRequest/Response/Session.");
         }
         return args;
+    }
+
+    private static Object defaultSessionValue(Class<?> type) {
+        if (!type.isPrimitive()) return null;
+        if (type == boolean.class) return false;
+        if (type == char.class) return '\0';
+        if (type == byte.class) return (byte) 0;
+        if (type == short.class) return (short) 0;
+        if (type == int.class) return 0;
+        if (type == long.class) return 0L;
+        if (type == float.class) return 0F;
+        if (type == double.class) return 0D;
+        return null;
     }
 
     private static void rejectRequestParam(Method method, Parameter p) {
@@ -123,6 +151,80 @@ public class ParamBinder {
     private static String prefixOf(ParamObject ann, Class<?> type) {
         String prefix = !ann.name().isBlank() ? ann.name() : ann.value();
         return prefix.isBlank() ? decapitalize(type.getSimpleName()) : prefix;
+    }
+
+    // ---------- Binding multipart (Sprint 8) ----------
+
+    private static FileUpload resolveFileUpload(Parameter p, HttpServletRequest req) throws Exception {
+        String fieldName = fileParamName(p);
+
+        String contentType = req.getContentType();
+        if (contentType == null || !contentType.toLowerCase().startsWith("multipart/")) {
+            throw new BindingException(
+                "Parametre \"" + fieldName + "\" de type FileUpload : la requete n'est pas "
+                + "multipart/form-data. Ajoutez enctype=\"multipart/form-data\" au formulaire "
+                + "et @MultipartConfig sur le servlet.");
+        }
+
+        Part part;
+        try {
+            part = req.getPart(fieldName);
+        } catch (Exception e) {
+            throw new BindingException(
+                "Impossible de lire la partie multipart \"" + fieldName + "\" : " + e.getMessage(), e);
+        }
+        if (part == null) {
+            return null;
+        }
+
+        String submitted = part.getSubmittedFileName();
+        byte[] content = readAll(part);
+
+        FileUpload file = new FileUpload();
+        file.setFieldName(fieldName);
+        file.setFileName(submitted);
+        file.setExtension(extensionOf(submitted));
+        file.setContentType(part.getContentType());
+        file.setContent(content);
+
+        file.getMetadata().put("fieldName", fieldName);
+        file.getMetadata().put("fileName", submitted);
+        file.getMetadata().put("extension", file.getExtension());
+        file.getMetadata().put("contentType", part.getContentType());
+        file.getMetadata().put("size", (long) content.length);
+        return file;
+    }
+
+    private static String fileParamName(Parameter p) {
+        Param ann = p.getAnnotation(Param.class);
+        if (ann != null) {
+            String n = !ann.name().isBlank() ? ann.name() : ann.value();
+            if (!n.isBlank()) {
+                return n;
+            }
+        }
+        String name = p.getName();
+        if (name == null || name.isBlank() || name.startsWith("arg")) {
+            return "filemap";
+        }
+        return name;
+    }
+
+    private static String extensionOf(String fileName) {
+        if (fileName == null) {
+            return "";
+        }
+        int dot = fileName.lastIndexOf('.');
+        if (dot < 0 || dot == fileName.length() - 1) {
+            return "";
+        }
+        return fileName.substring(dot + 1).toLowerCase();
+    }
+
+    private static byte[] readAll(Part part) throws IOException {
+        try (InputStream in = part.getInputStream()) {
+            return in.readAllBytes();
+        }
     }
 
     // ---------- Binding objet ----------

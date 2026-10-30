@@ -2,15 +2,13 @@ package src;
 
 import jakarta.servlet.ServletContext;
 import jakarta.servlet.ServletContextEvent;
-import jakarta.servlet.ServletContextListener;
-import jakarta.servlet.annotation.WebListener;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 import java.net.JarURLConnection;
-import java.net.URL;
 import java.net.URISyntaxException;
+import java.net.URL;
 import java.util.ArrayList;
 import java.util.Enumeration;
 import java.util.HashMap;
@@ -23,8 +21,6 @@ import src.annotation.GetMapping;
 import src.annotation.PostMapping;
 import src.annotation.RequestMapping;
 import src.annotation.Url;
-
-
 
 @WebListener
 public class FrontControllerListener implements ServletContextListener {
