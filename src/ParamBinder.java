@@ -43,6 +43,7 @@ public class ParamBinder {
             if (type.isAssignableFrom(HttpServletRequest.class)) { args[i] = req; continue; }
             if (type.isAssignableFrom(HttpServletResponse.class)) { args[i] = res; continue; }
             if (type.isAssignableFrom(HttpSession.class)) { args[i] = req.getSession(); continue; }
+            if (type == Sessions.class || Sessions.class.isAssignableFrom(type)) { args[i] = new Sessions(req); continue; }
 
             SessionAttribute sessionAnn = p.getAnnotation(SessionAttribute.class);
             if (sessionAnn != null) {
@@ -50,7 +51,11 @@ public class ParamBinder {
                 if (name.isBlank()) {
                     name = p.getName();
                 }
-                Object value = req.getSession().getAttribute(name);
+                Sessions sessions = new Sessions(req.getSession());
+                Object value = sessions.get(name);
+                if (value == null) {
+                    value = req.getSession().getAttribute(name);
+                }
                 if (value == null) {
                     if (sessionAnn.required()) {
                         throw new BindingException("Attribut de session manquant : \"" + name + "\"");
@@ -73,9 +78,28 @@ public class ParamBinder {
                 continue;
             }
 
-            // Sprint 8 : upload multipart -> FileUpload injecté tel quel
-            if (type == FileUpload.class) {
-                args[i] = resolveFileUpload(p, req);
+           
+            if (Part.class.isAssignableFrom(type)) {
+                String partName = fileParamName(p);
+                String contentType = req.getContentType();
+                if (contentType == null || !contentType.toLowerCase().startsWith("multipart/")) {
+                    throw new BindingException(
+                        "Parametre \"" + partName + "\" de type Part : la requete n'est pas "
+                        + "multipart/form-data. Ajoutez enctype=\"multipart/form-data\" au formulaire "
+                        + "et @MultipartConfig sur le servlet.");
+                }
+                try {
+                    Part part = req.getPart(partName);
+                    if (part == null || part.getSize() == 0) {
+                        throw new BindingException("Aucun fichier recu pour le champ : " + partName);
+                    }
+                    args[i] = part;
+                } catch (BindingException be) {
+                    throw be;
+                } catch (Exception e) {
+                    throw new BindingException(
+                        "Impossible de lire la partie multipart \"" + partName + "\" : " + e.getMessage(), e);
+                }
                 continue;
             }
 
@@ -91,7 +115,6 @@ public class ParamBinder {
             if (poAnn != null) {
                 String prefix = prefixOf(poAnn, type);
                 Object obj = bindObject(type, prefix, req);
-                validateObject(obj);
                 args[i] = obj;
                 continue;
             }
@@ -100,7 +123,7 @@ public class ParamBinder {
                 "Parametre non annote sur " + method.getDeclaringClass().getSimpleName()
                 + "." + method.getName() + "() param[" + i + " " + type.getSimpleName() + " " + p.getName() + "] : "
                 + "ajoutez @Param(name=\"...\") (Sprint 7), @ParamObject(name=\"...\") (Sprint 7b), "
-                + "@SessionAttribute, FileUpload (Sprint 8), ou HttpServletRequest/Response/Session.");
+                + "@SessionAttribute, Part (Sprint 8), ou HttpServletRequest/Response/Session.");
         }
         return args;
     }
@@ -155,46 +178,6 @@ public class ParamBinder {
 
     // ---------- Binding multipart (Sprint 8) ----------
 
-    private static FileUpload resolveFileUpload(Parameter p, HttpServletRequest req) throws Exception {
-        String fieldName = fileParamName(p);
-
-        String contentType = req.getContentType();
-        if (contentType == null || !contentType.toLowerCase().startsWith("multipart/")) {
-            throw new BindingException(
-                "Parametre \"" + fieldName + "\" de type FileUpload : la requete n'est pas "
-                + "multipart/form-data. Ajoutez enctype=\"multipart/form-data\" au formulaire "
-                + "et @MultipartConfig sur le servlet.");
-        }
-
-        Part part;
-        try {
-            part = req.getPart(fieldName);
-        } catch (Exception e) {
-            throw new BindingException(
-                "Impossible de lire la partie multipart \"" + fieldName + "\" : " + e.getMessage(), e);
-        }
-        if (part == null) {
-            return null;
-        }
-
-        String submitted = part.getSubmittedFileName();
-        byte[] content = readAll(part);
-
-        FileUpload file = new FileUpload();
-        file.setFieldName(fieldName);
-        file.setFileName(submitted);
-        file.setExtension(extensionOf(submitted));
-        file.setContentType(part.getContentType());
-        file.setContent(content);
-
-        file.getMetadata().put("fieldName", fieldName);
-        file.getMetadata().put("fileName", submitted);
-        file.getMetadata().put("extension", file.getExtension());
-        file.getMetadata().put("contentType", part.getContentType());
-        file.getMetadata().put("size", (long) content.length);
-        return file;
-    }
-
     private static String fileParamName(Parameter p) {
         Param ann = p.getAnnotation(Param.class);
         if (ann != null) {
@@ -210,23 +193,6 @@ public class ParamBinder {
         return name;
     }
 
-    private static String extensionOf(String fileName) {
-        if (fileName == null) {
-            return "";
-        }
-        int dot = fileName.lastIndexOf('.');
-        if (dot < 0 || dot == fileName.length() - 1) {
-            return "";
-        }
-        return fileName.substring(dot + 1).toLowerCase();
-    }
-
-    private static byte[] readAll(Part part) throws IOException {
-        try (InputStream in = part.getInputStream()) {
-            return in.readAllBytes();
-        }
-    }
-
     // ---------- Binding objet ----------
 
     private static Object bindObject(Class<?> clazz, String prefix, HttpServletRequest req) throws Exception {
@@ -239,21 +205,27 @@ public class ParamBinder {
                 + " (constructeur sans argument requis) : " + e.getMessage(), e);
         }
 
+        java.util.Set<String> populatedFields = new java.util.HashSet<>();
         for (Field f : getAllFields(clazz)) {
             String raw = readParam(req, prefix, f);
-            if (raw == null) {
+            if (raw == null || raw.isBlank()) {
                 continue; // champ absent -> @Required s'en chargera
             }
+            populatedFields.add(f.getName());
             DateFormat df = f.getAnnotation(DateFormat.class);
             String key = prefix + "." + customName(f);
             try {
                 setFieldValue(instance, f, convert(raw, f.getType(), key, df != null ? df.pattern() : null));
             } catch (Exception e) {
+                if (df != null && (f.getType() == java.util.Date.class || f.getType() == LocalDate.class)) {
+                    throw new BindingException(key + " : " + df.message() + " (valeur=\"" + raw + "\")", e);
+                }
                 throw new BindingException(
                     "Echec de conversion " + key + "=\"" + raw + "\" vers "
                     + f.getType().getSimpleName() + " : " + e.getMessage(), e);
             }
         }
+        validateObject(instance, populatedFields);
         return instance;
     }
 
@@ -335,7 +307,11 @@ public class ParamBinder {
 
     // ---------- Validation Sprint 7b ----------
 
-    private static void validateObject(Object obj) {
+    public static void validateObject(Object obj) {
+        validateObject(obj, java.util.Collections.emptySet());
+    }
+
+    private static void validateObject(Object obj, java.util.Set<String> populatedFields) {
         List<String> errors = new ArrayList<>();
         for (Field f : getAllFields(obj.getClass())) {
             f.setAccessible(true);
@@ -345,7 +321,7 @@ public class ParamBinder {
             } catch (IllegalAccessException e) {
                 continue;
             }
-            checkRequired(f, value, errors);
+            checkRequired(f, value, populatedFields, errors);
             checkNumeric(f, value, errors);
             checkRange(f, value, errors);
             checkDateFormat(f, value, errors);
@@ -356,10 +332,15 @@ public class ParamBinder {
         }
     }
 
-    private static void checkRequired(Field f, Object value, List<String> errors) {
+    private static void checkRequired(Field f, Object value, java.util.Set<String> populatedFields, List<String> errors) {
         Required req = f.getAnnotation(Required.class);
-        if (req != null && (value == null || (value instanceof String s && s.isBlank()))) {
-            errors.add(f.getName() + " : " + req.message() + " (@Required)");
+        if (req != null) {
+            boolean missing = !populatedFields.contains(f.getName())
+                    || value == null
+                    || (value instanceof String s && s.isBlank());
+            if (missing) {
+                errors.add(f.getName() + " : " + req.message() + " (@Required)");
+            }
         }
     }
 

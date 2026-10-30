@@ -22,12 +22,28 @@ public class Sessions {
           this.httpSession = httpSession;
      }
 
+     public HttpSession getHttpSession() {
+          return httpSession;
+     }
+
      public void set(String key, Object value) {
-          data().put(requireKey(key), value);
+          String k = requireKey(key);
+          data().put(k, value);
+          // Synchronise avec HttpSession pour accès direct en JSP : ${sessionScope.cle} ou ${cle}
+          if (value != null) {
+              httpSession.setAttribute(k, value);
+          } else {
+              httpSession.removeAttribute(k);
+          }
      }
 
      public <T> T get(String key) {
-          return value(data().get(requireKey(key)));
+          String k = requireKey(key);
+          Object val = data().get(k);
+          if (val == null) {
+              val = httpSession.getAttribute(k);
+          }
+          return value(val);
      }
 
      public <T> T getOrDefault(String key, T defaultValue) {
@@ -36,15 +52,25 @@ public class Sessions {
      }
 
      public boolean contains(String key) {
-          return data().containsKey(requireKey(key));
+          String k = requireKey(key);
+          return data().containsKey(k) || httpSession.getAttribute(k) != null;
      }
 
      public Object remove(String key) {
-          return data().remove(requireKey(key));
+          String k = requireKey(key);
+          httpSession.removeAttribute(k);
+          return data().remove(k);
      }
 
      public void clear() {
+          for (String k : data().keySet()) {
+              httpSession.removeAttribute(k);
+          }
           data().clear();
+     }
+
+     public Map<String, Object> getAll() {
+          return new HashMap<>(data());
      }
 
      public void invalidate() {
@@ -66,7 +92,7 @@ public class Sessions {
           if (key == null || key.isBlank()) {
                throw new IllegalArgumentException("La cle de session ne peut pas etre vide.");
           }
-          return key;
+          return key.trim();
      }
 
      @SuppressWarnings("unchecked")
