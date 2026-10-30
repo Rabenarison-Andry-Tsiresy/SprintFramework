@@ -1,0 +1,32 @@
+# Dossiers de compilation et build
+build/
+bin/
+target/
+dist/
+out/
+
+# Fichiers compilés et archives générées
+*.class
+*.jar
+*.war
+*.ear
+Framework.jar
+
+# Fichiers temporaires de scripts
+sources.txt
+*.log
+
+# Dossier d'upload généré lors des tests
+uploads/
+
+# IDE & Éditeurs
+.idea/
+*.iml
+.vscode/
+.settings/
+.project
+.classpath
+
+# Système d'exploitation
+.DS_Store
+Thumbs.db

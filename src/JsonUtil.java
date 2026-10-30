@@ -113,6 +113,7 @@ public class JsonUtil {
             while (clazz != null && clazz != Object.class) {
                 for (Field f : clazz.getDeclaredFields()) {
                     if (Modifier.isStatic(f.getModifiers())) continue;
+                    if (Modifier.isTransient(f.getModifiers())) continue;
                     if (f.isSynthetic()) continue;
                     f.setAccessible(true);
                     Object value;

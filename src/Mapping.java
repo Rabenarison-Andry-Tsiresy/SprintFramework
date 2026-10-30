@@ -8,8 +8,19 @@ public class Mapping {
     private String httpMethod;
 
     public Mapping(String url, String httpMethod) {
-        this.url = url;
-        this.httpMethod = httpMethod.toUpperCase();
+        this.url = normalizeUrl(url);
+        this.httpMethod = (httpMethod == null || httpMethod.isBlank()) ? "GET" : httpMethod.trim().toUpperCase();
+    }
+
+    private static String normalizeUrl(String url) {
+        if (url == null || url.isBlank()) {
+            return "/";
+        }
+        String trimmed = url.trim();
+        if (!trimmed.startsWith("/")) {
+            trimmed = "/" + trimmed;
+        }
+        return trimmed;
     }
 
     public String getUrl() {
@@ -23,12 +34,9 @@ public class Mapping {
     @Override
     public boolean equals(Object obj) {
         if (this == obj) return true;
-        if (!(obj instanceof Mapping)) return false;
-
-        Mapping other = (Mapping) obj;
-
-        return url.equals(other.url)
-                && httpMethod.equals(other.httpMethod);
+        if (!(obj instanceof Mapping other)) return false;
+        return Objects.equals(url, other.url)
+                && Objects.equals(httpMethod, other.httpMethod);
     }
 
     @Override
