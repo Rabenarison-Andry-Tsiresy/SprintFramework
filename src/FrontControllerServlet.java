@@ -13,6 +13,8 @@ import jakarta.servlet.annotation.MultipartConfig;
 import jakarta.servlet.http.HttpServlet;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
+import src.annotation.Authenticated;
+import src.annotation.RolesAllowed;
 import src.annotation.UrlApi;
 
 // Sprint 8 : active le parsing multipart de Tomcat (request.getPart(...)).
@@ -35,10 +37,10 @@ public class FrontControllerServlet extends HttpServlet {
     static class MethodInfo {
         Class<?> controllerClass;
         Method method;
-        Object controllerInstance;
+        Object controllerInstance; // sprint 11 : instance singleton
 
         MethodInfo(Class<?> controllerClass, Method method,
-             Object controllerInstance) {
+                   Object controllerInstance) {
             this.controllerClass = controllerClass;
             this.method = method;
             this.controllerInstance = controllerInstance;
@@ -86,7 +88,8 @@ public class FrontControllerServlet extends HttpServlet {
         if (urlMappings == null) {
             res.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR);
             res.setContentType("text/plain;charset=UTF-8");
-            res.getWriter().println("Erreur 500 : urlMappings non initialisé dans le ServletContext. Vérifiez que FrontControllerListener est bien actif.");
+            res.getWriter().println("Erreur 500 : urlMappings non initialisé dans le ServletContext. " +
+                    "Vérifiez que FrontControllerListener est bien actif.");
             return;
         }
 
@@ -129,6 +132,20 @@ public class FrontControllerServlet extends HttpServlet {
             try {
 
                 for (MethodInfo methodInfo : methodInfos) {
+
+                    // ===============================
+                    // Contrôle d'accès (Authenticated / RolesAllowed)
+                    // ===============================
+                    int accessStatus = accessStatus(methodInfo, req);
+                    if (accessStatus != HttpServletResponse.SC_OK) {
+                        res.setStatus(accessStatus);
+                        res.setContentType("text/plain;charset=UTF-8");
+                        res.getWriter().print(accessStatus == HttpServletResponse.SC_UNAUTHORIZED
+                                ? "Authentification requise."
+                                : "Acces refuse : role insuffisant.");
+                        return;
+                    }
+
                     Object[] args;
                     try {
                         args = ParamBinder.resolveMethodArgs(methodInfo.method, req, res);
@@ -209,38 +226,67 @@ public class FrontControllerServlet extends HttpServlet {
 
         } else {
 
-        res.setStatus(HttpServletResponse.SC_NOT_FOUND);
-        res.setContentType("text/plain");
-        java.io.PrintWriter out = res.getWriter();
+            res.setStatus(HttpServletResponse.SC_NOT_FOUND);
+            res.setContentType("text/plain;charset=UTF-8");
+            java.io.PrintWriter out = res.getWriter();
 
-        out.println("===== ERREUR 404 =====");
-        out.println("Aucune méthode trouvée pour :");
-        out.println("URL         : " + url);
-        out.println("HTTP Method : " + httpMethod);
-        out.println();
+            out.println("===== ERREUR 404 =====");
+            out.println("Aucune méthode trouvée pour :");
+            out.println("URL         : " + url);
+            out.println("HTTP Method : " + httpMethod);
+            out.println();
 
-        out.println("Routes disponibles :");
+            out.println("Routes disponibles :");
 
-        for (Map.Entry<Mapping, List<MethodInfo>> entry : getUrlMappings().entrySet()) {
+            for (Map.Entry<Mapping, List<MethodInfo>> entry : urlMappings.entrySet()) {
 
-            Mapping m = entry.getKey();
-            List<MethodInfo> infos = entry.getValue();
+                Mapping m = entry.getKey();
+                List<MethodInfo> infos = entry.getValue();
 
-            for (MethodInfo info : infos) {
-                boolean isApi = info.method.isAnnotationPresent(UrlApi.class);
-                boolean isObject = info.method.isAnnotationPresent(src.annotation.Object.class);
-                out.println(
-                        "[" + m.getHttpMethod() + "] "
-                        + m.getUrl()
-                        + (isApi ? " [API]" : "")
-                        + (isObject ? " [OBJECT]" : "")
-                        + " -> "
-                        + info.controllerClass.getSimpleName()
-                        + "."
-                        + info.method.getName()
-                );
+                for (MethodInfo info : infos) {
+                    boolean isApi = info.method.isAnnotationPresent(UrlApi.class);
+                    boolean isObject = info.method.isAnnotationPresent(src.annotation.Object.class);
+                    out.println(
+                            "[" + m.getHttpMethod() + "] "
+                            + m.getUrl()
+                            + (isApi ? " [API]" : "")
+                            + (isObject ? " [OBJECT]" : "")
+                            + " -> "
+                            + info.controllerClass.getSimpleName()
+                            + "."
+                            + info.method.getName()
+                    );
+                }
             }
         }
     }
-}
+
+    /**
+     * Uses the servlet container's authenticated principal and role mapping.
+     * - @Authenticated (méthode ou classe) -> 401 si pas d'utilisateur authentifié
+     * - @RolesAllowed  (méthode ou classe) -> 401 si pas authentifié, 403 si aucun rôle ne matche
+     *   (l'annotation de méthode l'emporte sur celle de classe)
+     */
+    private int accessStatus(MethodInfo info, HttpServletRequest req) {
+        RolesAllowed methodRoles = info.method.getAnnotation(RolesAllowed.class);
+        RolesAllowed classRoles = info.controllerClass.getAnnotation(RolesAllowed.class);
+        RolesAllowed roles = methodRoles != null ? methodRoles : classRoles;
+
+        boolean requiresAuthentication = info.method.isAnnotationPresent(Authenticated.class)
+                || info.controllerClass.isAnnotationPresent(Authenticated.class)
+                || roles != null;
+
+        if (requiresAuthentication && req.getUserPrincipal() == null) {
+            return HttpServletResponse.SC_UNAUTHORIZED;
+        }
+        if (roles != null) {
+            for (String role : roles.value()) {
+                if (role != null && !role.isBlank() && req.isUserInRole(role)) {
+                    return HttpServletResponse.SC_OK;
+                }
+            }
+            return HttpServletResponse.SC_FORBIDDEN;
+        }
+        return HttpServletResponse.SC_OK;
+    }
 }
